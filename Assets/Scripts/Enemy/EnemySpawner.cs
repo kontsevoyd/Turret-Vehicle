@@ -3,6 +3,18 @@ using UnityEngine;
 
 public class EnemySpawner : MonoBehaviour
 {
+    private struct EnemySpawnData
+    {
+        public Vector3 Position;
+        public Quaternion Rotation;
+
+        public EnemySpawnData(Vector3 position, Quaternion rotation)
+        {
+            Position = position;
+            Rotation = rotation;
+        }
+    }
+
     [SerializeField]
     private VehicleController target;
 
@@ -28,20 +40,38 @@ public class EnemySpawner : MonoBehaviour
     [SerializeField]
     private float destroyDistance = 20f;
 
+    private float spawnViewportY = 1f;
+
+    private int nextSpawnIndex;
+
+    private Plane groundPlane;
+
     private readonly List<EnemyBase> activeEnemies = new();
+    private readonly List<EnemySpawnData> pendingEnemies = new();
+
+    private void Awake()
+    {
+        groundPlane = new Plane(Vector3.up, transform.position);
+    }
 
     private void Update()
     {
-        if (target == null || !target.CanBeTargeted)
+        if (target == null)
             return;
 
-        DestroyEnemiesBehind();
+        SpawnEnemiesAhead();
+
+        if (target.CanBeTargeted)
+            DestroyEnemiesBehind();
     }
 
     public void SpawnLevelEnemies(float levelLength)
     {
         if (enemyCount <= 0)
             return;
+
+        pendingEnemies.Clear();
+        nextSpawnIndex = 0;
 
         float availableLength = levelLength - startOffset - endOffset;
         float spacing = availableLength / enemyCount;
@@ -54,12 +84,11 @@ public class EnemySpawner : MonoBehaviour
             Vector3 position = transform.position + new Vector3(x, 0f, z);
             Quaternion rotation = Quaternion.Euler(0f, Random.Range(0f, 360f), 0f);
 
-            EnemyBase enemy = Instantiate(enemyPrefab, position, rotation, transform);
-
-            enemy.SetTarget(target);
-            activeEnemies.Add(enemy);
-            enemy.Died.AddListener(OnEnemyDied);
+            pendingEnemies.Add(new EnemySpawnData(position, rotation));
         }
+
+        pendingEnemies.Sort((a, b) => a.Position.z.CompareTo(b.Position.z));
+        SpawnEnemiesAhead();
     }
 
     public void KillAllEnemies()
@@ -73,10 +102,54 @@ public class EnemySpawner : MonoBehaviour
         }
     }
 
+    private void SpawnEnemiesAhead()
+    {
+        float groundPositionZ = GetGroundPositionZ();
+
+        while (nextSpawnIndex < pendingEnemies.Count)
+        {
+            EnemySpawnData spawnData = pendingEnemies[nextSpawnIndex];
+
+            if (spawnData.Position.z > groundPositionZ)
+                break;
+
+            SpawnEnemy(spawnData);
+
+            nextSpawnIndex++;
+        }
+    }
+
+    private void SpawnEnemy(EnemySpawnData spawnData)
+    {
+        EnemyBase enemy = Instantiate(
+            enemyPrefab,
+            spawnData.Position,
+            spawnData.Rotation,
+            transform
+        );
+
+        enemy.SetTarget(target);
+        activeEnemies.Add(enemy);
+        enemy.Died.AddListener(OnEnemyDied);
+    }
+
     private void OnEnemyDied(EnemyBase enemy)
     {
         enemy.Died.RemoveListener(OnEnemyDied);
         activeEnemies.Remove(enemy);
+    }
+
+    private float GetGroundPositionZ()
+    {
+        Ray ray = Camera.main.ViewportPointToRay(new Vector3(0.5f, spawnViewportY, 0f));
+
+        if (groundPlane.Raycast(ray, out float distance))
+        {
+            Vector3 point = ray.GetPoint(distance);
+            return point.z;
+        }
+
+        return target.transform.position.z;
     }
 
     private void DestroyEnemiesBehind()
